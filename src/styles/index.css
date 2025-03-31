@@ -1,0 +1,191 @@
+/* src/styles/index.css (Stronger Dimming, No Correct Class Rule) */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --primary-bg: #212121;
+  --secondary-bg: #1e1e1e;
+  --text-primary: #a9b1d6;   /* Standard bright text */
+  --text-secondary: #e1e8ed;
+  --accent: #3e3e42;
+  --editor-bg: #1e1e1e;      /* TokyoNight bg */
+  --border-color: #3e3e42;
+  /* Adjusted: Make dimmer text more distinct */
+  --guided-text-dim-color: #555a71; /* Further desaturated */
+  --guided-dim-opacity: 0.45;       /* Opacity for dim text */
+  /* Incorrect character indicator */
+  --guided-incorrect-bg: rgba(255, 80, 80, 0.4);
+  --guided-incorrect-underline: #ff5050;
+}
+
+body {
+  font-family: 'JetBrains Mono', monospace;
+  background-color: var(--primary-bg);
+  color: var(--text-primary);
+}
+
+/* --- Editor Container Base --- */
+.editor-container {
+  overflow: hidden;
+  min-height: 300px;
+  position: relative;
+}
+
+/* --- Editor Wrapper Base (div containing <CodeMirror>) --- */
+.editor-left,
+.editor-right,
+.editor-guided-single {
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+}
+
+/* --- CodeMirror Component Wrapper Base (<CodeMirror> outer div) --- */
+.typing-area,
+.reference-code,
+.guided-editor-area {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+/* --- CodeMirror Internal Element Base (.cm-editor root) --- */
+.cm-editor {
+  background-color: var(--editor-bg) !important;
+  border: 1px solid var(--border-color);
+  height: 100% !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  color: var(--text-primary) !important; /* Base text color */
+}
+/* ... (rest of base .cm-editor, .cm-scroller, .cm-content, .cm-gutters styles remain the same) ... */
+.cm-editor .cm-scroller {
+   flex-grow: 1;
+   overflow: auto !important;
+}
+.cm-editor .cm-content {
+  font-family: 'JetBrains Mono', monospace !important;
+  caret-color: var(--text-secondary) !important;
+}
+.cm-gutters {
+     background-color: var(--editor-bg) !important;
+     border-right: 1px solid var(--border-color) !important;
+     color: var(--text-primary) !important;
+}
+.cm-activeLineGutter {
+    background-color: rgba(169, 177, 214, 0.1) !important;
+}
+
+/* ================= MODE: SIDE-BY-SIDE Specific ================== */
+
+.editor-layout-sideBySide {
+  display: flex !important;
+  position: relative !important;
+}
+.editor-layout-sideBySide > .editor-left,
+.editor-layout-sideBySide > .editor-right {
+  position: relative !important;
+  inset: auto !important; z-index: auto !important;
+  opacity: 1 !important; pointer-events: auto !important;
+  height: 100%; overflow: hidden; /* width set by inline style */
+}
+.editor-layout-sideBySide .typing-area > .cm-editor,
+.editor-layout-sideBySide .reference-code > .cm-editor {
+    background-color: var(--editor-bg) !important;
+    border: 1px solid var(--border-color) !important;
+    color: var(--text-primary) !important;
+}
+.editor-layout-sideBySide .typing-area > .cm-editor .cm-gutters,
+.editor-layout-sideBySide .reference-code > .cm-editor .cm-gutters {
+     background-color: var(--editor-bg) !important;
+     border-right: 1px solid var(--border-color) !important;
+     color: var(--text-primary) !important;
+}
+/* Reset decoration styles explicitly */
+.editor-layout-sideBySide span.guided-dim-text,
+.editor-layout-sideBySide span.guided-incorrect-text {
+    color: inherit !important;
+    background-color: transparent !important;
+    text-decoration: none !important;
+    opacity: 1 !important; /* Ensure opacity is reset */
+}
+.editor-layout-sideBySide > .editor-divider {
+  display: block !important; width: 4px; background-color: var(--border-color);
+  cursor: col-resize; flex-shrink: 0; transition: background-color 0.2s;
+}
+.editor-layout-sideBySide > .editor-divider:hover { background-color: var(--accent); }
+.editor-layout-sideBySide > .editor-guided-single { display: none !important; }
+
+
+/* ================== MODE: GUIDED Specific ====================== */
+
+.editor-layout-guided {
+  display: block !important; position: relative !important;
+}
+.editor-layout-guided > .editor-left,
+.editor-layout-guided > .editor-right,
+.editor-layout-guided > .editor-divider { display: none !important; }
+.editor-layout-guided > .editor-guided-single { display: block !important; height: 100%; }
+
+/* --- Guided Mode Decoration Styles --- */
+
+/* Style for the placeholder/dimmed text */
+/* Target ALL spans within the mark for broader override */
+.editor-layout-guided .cm-content span.guided-dim-text,
+.editor-layout-guided .cm-content span.guided-dim-text * {
+    color: var(--guided-text-dim-color) !important;
+    opacity: var(--guided-dim-opacity) !important;
+    background-color: transparent !important;
+    text-decoration: none !important;
+    /* Remove potential pointer events on dimmed text */
+    pointer-events: none;
+}
+
+/* Style for incorrectly typed characters */
+.editor-layout-guided .cm-content span.guided-incorrect-text {
+    color: var(--text-primary) !important; /* Make text bright red/pinkish */
+    background-color: var(--guided-incorrect-bg) !important;
+    text-decoration: none !important; /* Use background instead of underline */
+    /* text-decoration: underline wavy var(--guided-incorrect-underline) !important;
+    text-decoration-skip-ink: none !important; */
+    opacity: 1 !important;
+}
+/* NO .guided-correct-text rule needed - absence of dim/incorrect = correct */
+
+
+/* Typing editor CM: transparent background */
+.editor-layout-guided .guided-editor-area > .cm-editor {
+    background-color: transparent !important; border: none !important;
+}
+.editor-layout-guided .guided-editor-area > .cm-editor .cm-gutters {
+    background-color: transparent !important; border-right: none !important;
+    color: var(--text-primary) !important; /* Keep line numbers bright */
+}
+.editor-layout-guided .guided-editor-area > .cm-editor .cm-activeLineGutter {
+    background-color: rgba(169, 177, 214, 0.15) !important;
+}
+.editor-layout-guided .guided-editor-area > .cm-editor .cm-scroller {
+     background-color: transparent !important;
+}
+/* Ensure caret is visible */
+.editor-layout-guided .guided-editor-area .cm-cursor,
+.editor-layout-guided .guided-editor-area .cm-dropCursor {
+  border-color: var(--text-secondary) !important;
+}
+
+/* --- Other Styles --- */
+/* ... (Scrollbar, Snippet Tree styles remain the same) ... */
+.custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: var(--secondary-bg); }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+.snippet-tree { background-color: var(--secondary-bg); border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 1rem; max-height: 30vh; overflow-y: auto; }
+.snippet-folder { margin-bottom: 0.5rem; }
+.snippet-folder-header { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; padding: 0.25rem; border-radius: 0.25rem; transition: background-color 0.2s; }
+.snippet-folder-header:hover { background-color: var(--border-color); }
