@@ -13,7 +13,7 @@
   --editor-bg: #1e1e1e;         /* Editor matches primary */
   --text-primary: #d4d4d4;       /* Light Grey text (VSCode default) */
   --text-secondary: #ffffff;     /* White text for emphasis */
-  --accent: #007acc;         /* Bright Blue accent (VSCode default blue) */
+  --accent: #818285;         /* Bright Blue accent (VSCode default blue) */
   --border-color: #4e4e4e;       /* Clearer mid-grey border */
 
   /* Guided Mode Specific */
