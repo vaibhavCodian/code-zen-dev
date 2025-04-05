@@ -1,306 +1,280 @@
-// src/components/editor/EditorLayout.tsx (DEBUGGING VERSION)
-import React, { RefObject, useMemo, useState, useEffect } from 'react';
+// src/components/editor/EditorLayout.tsx
+// --- START COMPLETE FILE ---
+import React, { RefObject, useMemo, useState, useEffect, useCallback } from 'react';
 import CodeMirror, { EditorView, ViewUpdate, Decoration, DecorationSet } from '@uiw/react-codemirror';
-import { EditorState, Extension, StateField, StateEffect } from '@codemirror/state';
+import { EditorState, Extension, StateField, StateEffect, Prec } from '@codemirror/state';
+import { keymap, ViewPlugin } from '@codemirror/view';
 import { tokyoNight } from '@uiw/codemirror-theme-tokyo-night';
+// Import language-related tools
+import { syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'; // Use defaultHighlightStyle
 import { Expand, Minimize } from 'lucide-react';
 import { languageMap, SupportedLanguage } from '../../constants/editor';
 import { EditorMode } from '../../types';
-import { indentUnit } from '@codemirror/language'; // For potential future use
 
-// --- Decoration Setup ---
-const dimMark = Decoration.mark({ class: 'guided-dim-text' });
+// --- Decoration Setup --- (Unchanged)
+const revealedMark = Decoration.mark({ class: 'guided-revealed-text' });
 const incorrectMark = Decoration.mark({ class: 'guided-incorrect-text' });
 
-// --- State Effects ---
-const applyDimMark = StateEffect.define<{ from: number; to: number }>();
-const applyIncorrectMark = StateEffect.define<{ from: number; to: number }>();
-const clearGuidedMarks = StateEffect.define<{ from: number; to: number }>(); // Removes dim/incorrect
-const resetGuidedDecorations = StateEffect.define<EditorState>();
+// --- State Effects --- (Unchanged)
+const revealCharacter = StateEffect.define<{ from: number; to: number }>();
+const addIncorrectMark = StateEffect.define<{ from: number; to: number }>();
+const clearMark = StateEffect.define<{ from: number; to: number }>();
+const resetAllGuidedDecorations = StateEffect.define<null>();
 
-
-// --- State Field for Decorations (WITH DEBUG LOGGING) ---
+// --- State Field for Guided Mode Decorations --- (Unchanged)
 const guidedDecorationState = StateField.define<DecorationSet>({
-    create(state) {
-        console.log("[StateField.create] Initializing decorations (dim all)");
-        return Decoration.set(state.doc.length > 0 ? [dimMark.range(0, state.doc.length)] : []);
-    },
+    create() { return Decoration.none; },
     update(decoSet, tr) {
-        console.log("[StateField.update] Transaction:", tr);
-        if (!tr.docChanged && !tr.effects.length) {
-             console.log("[StateField.update] No changes or effects, returning old decoSet.");
-             return decoSet;
-        }
-
-        console.log("[StateField.update] Mapping decoSet through changes...");
-        let mappedDecoSet = decoSet.map(tr.changes);
-        console.log("[StateField.update] DecoSet BEFORE effects:", mappedDecoSet.size);
-
-
-        for (let e of tr.effects) {
-             console.log("[StateField.update] Processing Effect:", e);
-             if (e.is(clearGuidedMarks)) {
-                 console.log(`[StateField.update] > Clearing marks in range ${e.value.from}-${e.value.to}`);
-                 mappedDecoSet = mappedDecoSet.update({
-                    filterFrom: e.value.from,
-                    filterTo: e.value.to,
-                    // Precise filter: ONLY remove dim or incorrect marks WITHIN the range
-                    filter: (from, to, deco) => {
-                         const shouldKeep = !(
-                            (deco.spec.class === 'guided-dim-text' || deco.spec.class === 'guided-incorrect-text') &&
-                             from >= e.value.from && to <= e.value.to // Strict containment check
-                        );
-                         // console.log(`    Filtering deco ${deco.spec.class} [${from}-${to}]: ${shouldKeep ? 'KEEP' : 'REMOVE'}`);
-                         return shouldKeep;
-                    }
-                 });
-             } else if (e.is(applyDimMark)) {
-                 console.log(`[StateField.update] > Applying DIM mark in range ${e.value.from}-${e.value.to}`);
-                 // First, clear any *incorrect* mark in the specific target range
-                 mappedDecoSet = mappedDecoSet.update({
-                     filterFrom: e.value.from, filterTo: e.value.to,
-                     filter: (f, t, deco) => !(deco.spec.class === 'guided-incorrect-text' && f>=e.value.from && t<=e.value.to)
-                 });
-                 // Then add the dim mark (will overwrite if needed, update handles this)
-                 if (e.value.from < e.value.to) {
-                     mappedDecoSet = mappedDecoSet.update({ add: [dimMark.range(e.value.from, e.value.to)], sort: true });
-                 }
-            } else if (e.is(applyIncorrectMark)) {
-                 console.log(`[StateField.update] > Applying INCORRECT mark in range ${e.value.from}-${e.value.to}`);
-                 // First, clear any *dim* mark in the specific target range
-                mappedDecoSet = mappedDecoSet.update({
-                    filterFrom: e.value.from, filterTo: e.value.to,
-                    filter: (f, t, deco) => !(deco.spec.class === 'guided-dim-text' && f>=e.value.from && t<=e.value.to)
-                });
-                 // Then add the incorrect mark
-                 if (e.value.from < e.value.to) {
-                     mappedDecoSet = mappedDecoSet.update({ add: [incorrectMark.range(e.value.from, e.value.to)], sort: true });
-                 }
-            } else if (e.is(resetGuidedDecorations)) {
-                 console.log("[StateField.update] > Resetting all decorations (dim all)");
-                 const docLen = e.value.doc.length;
-                 mappedDecoSet = Decoration.set(docLen > 0 ? [dimMark.range(0, docLen)] : []);
+        let newDecoSet = decoSet.map(tr.changes);
+        for (const e of tr.effects) {
+            if (e.is(revealCharacter)) {
+                newDecoSet = newDecoSet.update({ filterFrom: e.value.from, filterTo: e.value.to, filter: (f, t, deco) => deco.spec.class !== 'guided-incorrect-text' });
+                if (e.value.from < e.value.to) { newDecoSet = newDecoSet.update({ add: [revealedMark.range(e.value.from, e.value.to)], sort: true }); }
+            } else if (e.is(addIncorrectMark)) {
+                newDecoSet = newDecoSet.update({ filterFrom: e.value.from, filterTo: e.value.to, filter: (f, t, deco) => deco.spec.class !== 'guided-revealed-text' });
+                if (e.value.from < e.value.to) { newDecoSet = newDecoSet.update({ add: [incorrectMark.range(e.value.from, e.value.to)], sort: true }); }
+            } else if (e.is(clearMark)) {
+                 newDecoSet = newDecoSet.update({ filterFrom: e.value.from, filterTo: e.value.to, filter: (f, t, deco) => !(f >= e.value.from && t <= e.value.to && (deco.spec.class === 'guided-revealed-text' || deco.spec.class === 'guided-incorrect-text')) });
+            } else if (e.is(resetAllGuidedDecorations)) {
+                newDecoSet = Decoration.none;
             }
         }
-        console.log("[StateField.update] DecoSet AFTER effects:", mappedDecoSet.size);
-        // Log the final decorations for inspection
-        // let finalDecos = [];
-        // mappedDecoSet.between(0, tr.state.doc.length, (from, to, deco) => {finalDecos.push({from, to, class: deco.spec.class})});
-        // console.log("[StateField.update] Final Decorations:", finalDecos);
-        return mappedDecoSet;
+        return newDecoSet;
     },
     provide: f => EditorView.decorations.from(f)
 });
 
+// --- Plugin to force cursor position --- (Unchanged)
+const forceCursorPosition = (getProgress: () => number) => ViewPlugin.fromClass(class {
+    update(update: ViewUpdate) {
+        if (update.view.hasFocus && (update.docChanged || update.selectionSet)) {
+            const currentProgress = getProgress();
+             if (update.state.selection.main.anchor !== currentProgress) {
+                 // Use requestAnimationFrame to avoid conflicts with other state updates
+                 requestAnimationFrame(() => {
+                    if (update.view.hasFocus && !update.view.isDestroyed) {
+                         try {
+                             update.view.dispatch({ selection: { anchor: currentProgress }, scrollIntoView: true });
+                         } catch (error) {
+                            // Ignore errors that might occur if the view is destroyed mid-update
+                             if (!(error instanceof RangeError) || !error.message.includes("Invalid position")) {
+                                 console.error("Error dispatching cursor update:", error);
+                             }
+                         }
+                     }
+                 });
+            } else if(update.selectionSet) {
+                  requestAnimationFrame(() => {
+                     if (update.view.hasFocus && !update.view.isDestroyed) {
+                          try {
+                              update.view.dispatch({ scrollIntoView: true });
+                          } catch (error) {
+                             // Ignore potential errors during rapid updates
+                              if (!(error instanceof RangeError) || !error.message.includes("Invalid position")) {
+                                  console.error("Error dispatching scrollIntoView:", error);
+                              }
+                          }
+                      }
+                 });
+            }
+        }
+    }
+});
+
 
 // --- Component ---
-interface EditorLayoutProps { /* ... props ... */
-    editMode: EditorMode;
-    typedCode: string;
-    currentCode: string;
-    language: SupportedLanguage;
-    leftWidth: number;
-    containerRef: RefObject<HTMLDivElement>;
-    dividerRef: RefObject<HTMLDivElement>;
-    isFullscreen: boolean;
-    onTypedCodeChange: (value: string, viewUpdate?: ViewUpdate) => void;
-    onToggleFullscreen: () => void;
- }
+interface EditorLayoutProps { /* ... props remain the same ... */
+    editMode: EditorMode; typedCode: string; currentCode: string; language: SupportedLanguage; leftWidth: number; containerRef: RefObject<HTMLDivElement>; dividerRef: RefObject<HTMLDivElement>; isFullscreen: boolean; onTypedCodeChange: (value: string, viewUpdate?: ViewUpdate) => void; onToggleFullscreen: () => void;
+}
 
 export function EditorLayout({
-    editMode,
-    typedCode,
-    currentCode,
-    language,
-    leftWidth,
-    containerRef,
-    dividerRef,
-    isFullscreen,
-    onTypedCodeChange,
-    onToggleFullscreen,
+    editMode, typedCode, currentCode, language, leftWidth, containerRef, dividerRef, isFullscreen, onTypedCodeChange, onToggleFullscreen,
 }: EditorLayoutProps) {
-
     const [guidedView, setGuidedView] = useState<EditorView | null>(null);
-    const [userProgress, setUserProgress] = useState(0);
-
+    const [guidedProgress, setGuidedProgress] = useState(0);
+    const getGuidedProgress = useCallback(() => guidedProgress, [guidedProgress]); // Use callback to ensure stable reference
     const currentLanguageExtension = useMemo(() => languageMap[language] || languageMap.javascript, [language]);
-    const baseThemeExtensions = useMemo(() => [ tokyoNight, EditorView.lineWrapping, EditorView.theme({ '&': { height: '100%' }, '.cm-scroller': { overflow: 'auto' } }) ], []);
 
-    // --- Extensions ---
-    const sideBySideEditableExtensions: Extension[] = useMemo(() => [ baseThemeExtensions, currentLanguageExtension, EditorState.readOnly.of(false)], [baseThemeExtensions, currentLanguageExtension]);
-    const sideBySideReadOnlyExtensions: Extension[] = useMemo(() => [ baseThemeExtensions, currentLanguageExtension, EditorState.readOnly.of(true), EditorView.editable.of(false)], [baseThemeExtensions, currentLanguageExtension]);
-
-    const guidedSingleEditorExtensions: Extension[] = useMemo(() => [
-        baseThemeExtensions,
-        currentLanguageExtension,
-        guidedDecorationState,
-        EditorState.readOnly.of(true),
-        EditorView.editable.of(true),
-        EditorView.domEventHandlers({
-            keydown(event, view) {
-                if (editMode !== 'guided') return false;
-                console.log(`[keydown] Key: "${event.key}", Code: "${event.code}", Modifiers: ctrl=${event.ctrlKey},meta=${event.metaKey},alt=${event.altKey},shift=${event.shiftKey}`);
-
-
-                const currentPos = userProgress;
-                const docLength = view.state.doc.length;
-                let handled = false;
-
-                // 1. Handle Backspace
-                if (event.key === 'Backspace') {
-                    event.preventDefault();
-                    if (currentPos > 0) {
-                        const prevPos = currentPos - 1;
-                        console.log(`[keydown] Backspace: Progress ${currentPos} -> ${prevPos}`);
-                        setUserProgress(prevPos);
-                        // Apply dim mark to the character we moved back to
-                        console.log(`[keydown] Dispatching applyDimMark for ${prevPos}-${prevPos + 1}`);
-                        view.dispatch({
-                             effects: applyDimMark.of({ from: prevPos, to: prevPos + 1 }),
-                             selection: { anchor: prevPos }
-                         });
-                    } else {
-                        console.log("[keydown] Backspace at start, doing nothing.");
-                    }
-                    handled = true;
-                }
-                 // 2. Handle Delete (reset char under cursor to dim)
-                 else if (event.key === 'Delete') {
-                     event.preventDefault();
-                     if (currentPos < docLength) {
-                         console.log(`[keydown] Delete: Resetting char at ${currentPos}`);
-                         // Apply dim mark to the character at current cursor pos
-                         view.dispatch({
-                            effects: applyDimMark.of({ from: currentPos, to: currentPos + 1}),
-                             selection: { anchor: currentPos }
-                        });
-                     } else {
-                         console.log("[keydown] Delete at end, doing nothing.");
-                     }
-                    handled = true;
-                 }
-
-                // 3. Handle Single Character Input (printable, allow Shift)
-                else if ( event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey ) {
-                    event.preventDefault();
-                    if (currentPos < docLength) {
-                        const expectedChar = view.state.doc.sliceString(currentPos, currentPos + 1);
-                        const typedChar = event.key;
-                        console.log(`[keydown] Char Input: Typed "${typedChar}", Expected "${expectedChar}" at pos ${currentPos}`);
-
-                        let effects: StateEffect<any>[] = [];
-
-                        if (typedChar === expectedChar) {
-                            console.log("[keydown] Correct char: Dispatching clearGuidedMarks");
-                            effects.push(clearGuidedMarks.of({ from: currentPos, to: currentPos + 1 }));
-                        } else {
-                            // --- DEBUG: Temporarily treat incorrect as correct to isolate dimming issue ---
-                            // console.log("[keydown] Incorrect char: Dispatching applyIncorrectMark");
-                            // effects.push(applyIncorrectMark.of({ from: currentPos, to: currentPos + 1 }));
-                            // --- END DEBUG ---
-                             console.log("[keydown] TEMP DEBUG: Incorrect char -> Treating as correct (Dispatching clearGuidedMarks)");
-                             effects.push(clearGuidedMarks.of({ from: currentPos, to: currentPos + 1 }));
-                        }
-
-                        setUserProgress(currentPos + 1);
-                         view.dispatch({
-                             effects: effects,
-                             selection: { anchor: currentPos + 1 },
-                             scrollIntoView: true
-                         });
-                    } else {
-                         console.log("[keydown] Char Input: At end of document.");
-                    }
-                    handled = true;
-                }
-                // 4. Handle Enter key for newlines
-                 else if (event.key === 'Enter') {
-                      event.preventDefault();
-                       if (currentPos < docLength) {
-                           const expectedChar = view.state.doc.sliceString(currentPos, currentPos + 1);
-                           console.log(`[keydown] Enter: Expected "${expectedChar === '\n' ? '\\n' : expectedChar}" at pos ${currentPos}`);
-                           let effects: StateEffect<any>[] = [];
-                           if (expectedChar === '\n') {
-                               console.log("[keydown] Correct Enter: Dispatching clearGuidedMarks");
-                               effects.push(clearGuidedMarks.of({ from: currentPos, to: currentPos + 1 }));
-                           } else {
-                                // --- DEBUG: Temporarily treat incorrect as correct ---
-                                // console.log("[keydown] Incorrect Enter: Dispatching applyIncorrectMark");
-                                // effects.push(applyIncorrectMark.of({ from: currentPos, to: currentPos + 1 }));
-                                // --- END DEBUG ---
-                                console.log("[keydown] TEMP DEBUG: Incorrect Enter -> Treating as correct (Dispatching clearGuidedMarks)");
-                                effects.push(clearGuidedMarks.of({ from: currentPos, to: currentPos + 1 }));
-                           }
-                           setUserProgress(currentPos + 1);
-                            view.dispatch({
-                                effects: effects,
-                                selection: { anchor: currentPos + 1 },
-                               scrollIntoView: true
-                           });
-                       } else {
-                            console.log("[keydown] Enter: At end of document.");
-                       }
-                      handled = true;
-                  }
-
-                 // 5. Allow navigation/modifiers/escape (Let CM handle them)
-                 const allowedKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Tab', 'Shift', 'Control', 'Alt', 'Meta', 'Escape'];
-                 if (allowedKeys.includes(event.key)) {
-                     console.log(`[keydown] Allowing navigation/modifier key: "${event.key}"`);
-                      return false;
-                 }
-
-                 // 6. If not handled and not explicitly allowed, prevent default
-                 if (!handled) {
-                    console.log(`[keydown] Preventing unhandled key: "${event.key}"`);
-                    event.preventDefault();
-                    return true;
-                 }
-                 return handled;
-            },
+    // Base extensions used by both modes
+    const baseExtensions = useMemo(() => [
+        tokyoNight, // Base color theme
+        EditorView.lineWrapping,
+        EditorView.theme({ // Common layout styles
+            '&': { height: '100%', },
+            // Apply font family and size to both editor and gutters
+            '&, .cm-gutters': { fontFamily: '"JetBrains Mono", monospace', fontSize: '0.9rem' },
+            '.cm-scroller': { overflow: 'auto', height: '100%', fontFamily: 'inherit' }, // Scroller should inherit font
+            '.cm-content': { caretColor: 'var(--accent)' },
         }),
+        currentLanguageExtension, // Language support
+        // Apply default syntax highlighting using the base theme's colors
+        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    ], [currentLanguageExtension]);
 
-    ], [baseThemeExtensions, currentLanguageExtension, editMode, userProgress]);
+    // Side-by-Side Mode Extensions
+    const sideBySideEditableExtensions: Extension[] = useMemo(() => [
+        baseExtensions,
+        EditorState.readOnly.of(false),
+    ], [baseExtensions]);
 
+    const sideBySideReadOnlyExtensions: Extension[] = useMemo(() => [
+        baseExtensions,
+        EditorState.readOnly.of(true),
+        EditorView.editable.of(false), // Explicitly make view non-editable
+    ], [baseExtensions]);
 
-    // Effect to reset guided mode state
-     useEffect(() => {
+    // Guided Mode Extensions
+    const guidedSingleEditorExtensions: Extension[] = useMemo(() => [
+        baseExtensions,          // Includes base theme, language, wrapping, default highlighting
+        guidedDecorationState,   // Manages reveal/incorrect decoration marks
+        EditorState.readOnly.of(true), // Document non-editable
+        EditorView.editable.of(true),  // View receives input
+        forceCursorPosition(getGuidedProgress), // Keep cursor fixed
+        Prec.highest(keymap.of([ // Input handling
+             // Backspace: Move progress back, clear marks at new position
+             { key: 'Backspace', run: (view): boolean => {
+                 if (editMode !== 'guided') return false;
+                 const currentPos = guidedProgress;
+                 if (currentPos > 0) {
+                     const prevPos = currentPos - 1;
+                     setGuidedProgress(prevPos);
+                     // Clear marks in the range we are moving back TO
+                     view.dispatch({
+                         effects: clearMark.of({ from: prevPos, to: currentPos }),
+                         selection: { anchor: prevPos }, // Move cursor first
+                         scrollIntoView: true
+                     });
+                 }
+                 return true; // We handled it
+             }},
+             // Prevent Delete, Arrows, Home, End, Page keys, Paste, Cut from doing anything
+             // This enforces linear typing for the guided exercise
+             { key: 'Delete', run: () => editMode === 'guided' },
+             { key: 'ArrowLeft', run: () => editMode === 'guided' },
+             { key: 'ArrowRight', run: () => editMode === 'guided' },
+             { key: 'ArrowUp', run: () => editMode === 'guided' },
+             { key: 'ArrowDown', run: () => editMode === 'guided' },
+             { key: 'Home', run: () => editMode === 'guided' },
+             { key: 'End', run: () => editMode === 'guided' },
+             { key: 'PageUp', run: () => editMode === 'guided' },
+             { key: 'PageDown', run: () => editMode === 'guided' },
+             { key: 'Mod-v', run: () => editMode === 'guided' }, // Prevent Paste
+             { key: 'Mod-x', run: () => editMode === 'guided' }, // Prevent Cut
+             // Allow Select All (Cmd/Ctrl+A) for potential debugging/inspection? Maybe remove later.
+             // { key: 'Mod-a', run: () => editMode === 'guided' },
+
+             // Universal handler for printable characters and Enter
+             { any: (view, event): boolean => {
+                 // Only process in guided mode, ignore modifiers, allow Enter or single chars
+                 if (editMode !== 'guided' || event.ctrlKey || event.metaKey || event.altKey || (event.key.length !== 1 && event.key !== 'Enter')) {
+                     return false; // Let other keys (like Escape, F-keys) pass through or be ignored
+                 }
+
+                 event.preventDefault(); // We will handle the input
+
+                 const currentPos = guidedProgress;
+                 const docLength = view.state.doc.length;
+                 if (currentPos >= docLength) return true; // Reached the end
+
+                 const expectedChar = view.state.doc.sliceString(currentPos, currentPos + 1);
+                 const typedChar = event.key === 'Enter' ? '\n' : event.key;
+                 let effects: StateEffect<any>[] = [];
+                 let progressIncrement = 0;
+
+                 // Clear any previous incorrect mark at this position before evaluating
+                 effects.push(clearMark.of({ from: currentPos, to: currentPos + 1 }));
+
+                 if (typedChar === expectedChar) {
+                     // Correct: reveal the character (which simply removes dim/incorrect via clearMark)
+                     // No need to add a specific "revealed" mark if CSS handles opacity correctly
+                     progressIncrement = 1;
+                     // We already cleared, so no 'revealCharacter' effect is needed if CSS handles it
+                     // If CSS doesn't work reliably, uncomment this:
+                     // effects.push(revealCharacter.of({ from: currentPos, to: currentPos + 1 }));
+                 } else {
+                     // Incorrect: Add incorrect mark
+                     if(currentPos + 1 <= docLength) {
+                         effects.push(addIncorrectMark.of({ from: currentPos, to: currentPos + 1 }));
+                     }
+                     // Progress does NOT increment on incorrect input
+                     progressIncrement = 0;
+                 }
+
+                 const nextProgress = currentPos + progressIncrement;
+                 if(progressIncrement > 0) { // Only update progress if correct
+                    setGuidedProgress(nextProgress);
+                 }
+
+                 // Dispatch transaction to update decorations and cursor
+                 view.dispatch({
+                     effects: effects,
+                     selection: { anchor: nextProgress }, // Move cursor even if incorrect (or keep at currentPos if preferred)
+                     scrollIntoView: true
+                 });
+                 return true; // We handled the event
+             }}
+        ]))
+    ], [baseExtensions, currentLanguageExtension, editMode, guidedProgress, getGuidedProgress]);
+
+     // Effect to reset guided mode state
+    useEffect(() => {
         if (editMode === 'guided' && guidedView) {
-            console.log("[useEffect reset] Resetting Guided Mode State.");
-            setUserProgress(0);
-             guidedView.dispatch({ effects: resetGuidedDecorations.of(guidedView.state) });
-             guidedView.dispatch({ selection: { anchor: 0 }});
+            console.log("Resetting Guided Mode on mode/code change");
+            setGuidedProgress(0);
+            // Use the reset effect for the StateField
+            guidedView.dispatch({
+                effects: resetAllGuidedDecorations.of(null),
+                selection: { anchor: 0 }, // Reset cursor
+                scrollIntoView: true
+            });
         } else if (editMode === 'sideBySide') {
-             setUserProgress(0);
+            setGuidedProgress(0); // Reset progress if switching away
         }
-    }, [editMode, currentCode, guidedView]);
+    // Ensure reset happens if the underlying code changes while in guided mode
+    }, [editMode, currentCode, language, guidedView]); // Added language dependency
 
 
-    // --- Rendering ---
-    const containerModeClass = `editor-layout-${editMode}`;
+    const containerModeClass = editMode === 'guided' ? 'editor-layout-guided' : 'editor-layout-sideBySide';
     const leftStyle = editMode === 'sideBySide' ? { width: `${leftWidth}%` } : {};
     const rightStyle = editMode === 'sideBySide' ? { width: `${100 - leftWidth}%` } : {};
 
+    // --- Rendering ---
     return (
-         <div className="relative h-full flex flex-col">
-            <div className="absolute top-4 right-4 z-20">
-                <button onClick={onToggleFullscreen} className="p-2 bg-[var(--secondary-bg)] rounded-full hover:bg-[var(--accent)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)]" aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}>
-                    {isFullscreen ? <Minimize className="w-5 h-5" /> : <Expand className="w-5 h-5" />}
-                </button>
-            </div>
-            <div ref={containerRef} className={`editor-container flex-grow ${containerModeClass}`}>
+        <div className="relative h-full flex flex-col">
+             <div className="absolute top-2 right-2 z-20">
+                <button
+                    onClick={onToggleFullscreen}
+                    className="p-2 bg-[var(--secondary-bg)] rounded-full hover:bg-[var(--accent)] hover:text-white transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[var(--secondary-bg)] focus:ring-[var(--accent)] text-[var(--text-primary)]"
+                    aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                >
+                    {isFullscreen ? <Minimize className="w-4 h-4" /> : <Expand className="w-4 h-4" />}
+                 </button>
+             </div>
+             <div ref={containerRef} className={`editor-container flex-grow ${containerModeClass} border border-[var(--border-color)] rounded-md overflow-hidden`}>
                 {editMode === 'sideBySide' ? (
                     <>
-                        <div className="editor-left h-full" style={leftStyle}> <CodeMirror value={typedCode} extensions={sideBySideEditableExtensions} onChange={onTypedCodeChange} className="typing-area h-full" /> </div>
-                        <div ref={dividerRef} className="editor-divider" role="separator"/>
-                        <div className="editor-right h-full" style={rightStyle}> <CodeMirror value={currentCode} extensions={sideBySideReadOnlyExtensions} readOnly={true} className="reference-code h-full" /> </div>
+                        <div className="editor-pane editor-left h-full" style={leftStyle}>
+                            <CodeMirror value={typedCode} extensions={sideBySideEditableExtensions} onChange={onTypedCodeChange} className="typing-area h-full" />
+                        </div>
+                        <div ref={dividerRef} className="editor-divider flex-shrink-0 w-[6px] bg-[var(--border-color)] cursor-col-resize hover:bg-[var(--accent)] transition-colors" role="separator" aria-orientation="vertical" />
+                        <div className="editor-pane editor-right h-full" style={rightStyle}>
+                            <CodeMirror value={currentCode} extensions={sideBySideReadOnlyExtensions} readOnly={true} className="reference-code h-full" />
+                        </div>
                     </>
-                ) : (
-                    <div className="editor-guided-single h-full">
-                        <CodeMirror value={currentCode} extensions={guidedSingleEditorExtensions} className="guided-editor-area h-full" onCreateEditor={setGuidedView} readOnly={false} />
+                ) : ( // Guided Mode
+                    <div className="editor-pane editor-guided-single h-full w-full">
+                        <CodeMirror
+                            value={currentCode}
+                            extensions={guidedSingleEditorExtensions}
+                            onCreateEditor={setGuidedView}
+                            className="guided-editor-area h-full"
+                            // View is made editable via extension, state is read-only via extension
+                            readOnly={false}
+                        />
                     </div>
                 )}
             </div>
         </div>
     );
 }
+// --- END COMPLETE FILE ---
